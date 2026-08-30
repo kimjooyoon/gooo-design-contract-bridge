@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   bridge:
@@ -46,3 +47,12 @@ jobs:
           path: ${{ steps.evaluate.outputs.output_dir }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Record Actions artifact receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "## Actions artifact receipt" >> "$GITHUB_STEP_SUMMARY"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name == "gooo-design-contract-bridge") | "- id=\(.id) name=\(.name) digest=\(.digest) files=5 size_in_bytes=\(.size_in_bytes)"' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
