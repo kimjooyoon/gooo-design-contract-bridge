@@ -1,0 +1,31 @@
+{
+  "schema": "gooo/design-contract-bridge/denominator/v2",
+  "source": "contracts/design-token-bridge.gooo",
+  "total_cells": 12,
+  "proof_counts": {"FOUNDATION": 4, "COHERENCE": 4, "REGRESSION": 4},
+  "indicator_counts": {"DRIVER": 4, "OUTCOME": 4, "GUARDRAIL": 4},
+  "unknown_fields": ["stage", "step", "reason", "unknown_class", "next_operation", "blocked_by"],
+  "precedence": "REFUTED_OVER_UNKNOWN",
+  "reader_resolutions": ["EXACT", "ROLE", "EXISTENCE"],
+  "cells": [
+    {"id": "foundation.core-release", "activity": "DeclareCanvasToken", "proof": "FOUNDATION", "indicator": "DRIVER", "axis": "CORE_RELEASE"},
+    {"id": "foundation.spec-release", "activity": "DeclarePrimaryTextToken", "proof": "FOUNDATION", "indicator": "DRIVER", "axis": "SPEC_RELEASE"},
+    {"id": "foundation.design-release", "activity": "DeclareSpacingToken", "proof": "FOUNDATION", "indicator": "DRIVER", "axis": "DESIGN_RELEASE"},
+    {"id": "foundation.meta-activity-authority", "activity": "DeclareRadiusToken", "proof": "FOUNDATION", "indicator": "DRIVER", "axis": "META_ACTIVITY_AUTHORITY"},
+    {"id": "coherence.claim-disposition-source", "activity": "ProjectTokenArtifact", "proof": "COHERENCE", "indicator": "OUTCOME", "axis": "CLAIM_DISPOSITION_SOURCE"},
+    {"id": "coherence.product-projection", "activity": "ProjectCSSArtifact", "proof": "COHERENCE", "indicator": "OUTCOME", "axis": "PRODUCT_PROJECTION"},
+    {"id": "coherence.eight-file-envelope", "activity": "BindGenerationReceipt", "proof": "COHERENCE", "indicator": "OUTCOME", "axis": "EIGHT_FILE_ENVELOPE"},
+    {"id": "coherence.consumer-semantic-match", "activity": "BindClaimGraph", "proof": "COHERENCE", "indicator": "OUTCOME", "axis": "CONSUMER_CLAIM_GRAPH"},
+    {"id": "regression.reader-resolution", "activity": "ResolveReaderResolutions", "proof": "REGRESSION", "indicator": "GUARDRAIL", "axis": "READER_RESOLUTION"},
+    {"id": "regression.unknown-causality", "activity": "PreserveUnknownCausality", "proof": "REGRESSION", "indicator": "GUARDRAIL", "axis": "UNKNOWN_CAUSALITY"},
+    {"id": "regression.refuted-counterexamples", "activity": "EnforceRefutedPrecedence", "proof": "REGRESSION", "indicator": "GUARDRAIL", "axis": "REFUTED_COUNTEREXAMPLES"},
+    {"id": "regression.authority-boundary", "activity": "EnforceAuthorityBoundary", "proof": "REGRESSION", "indicator": "GUARDRAIL", "axis": "AUTHORITY_BOUNDARY"}
+  ],
+  "policy": {
+    "repository_writes": 0,
+    "local_test_executions": 0,
+    "cross_project_required_gates": 0,
+    "product_generation_scope": "caller-owned-temp-output-only",
+    "visual_similarity_can_close": false
+  }
+}

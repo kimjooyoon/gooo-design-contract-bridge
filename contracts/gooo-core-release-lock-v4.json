@@ -1,0 +1,22 @@
+{
+  "schema": "gooo/design-contract-bridge/core-release-lock/v4",
+  "repository": "kimjooyoon/meta-ontology-go",
+  "release": {
+    "tag": "v0.4.0-dev",
+    "release_id": 378565653,
+    "tag_target_commit_sha": "57ac9ec486bbca69e447a8eba94e0ce3cd03ced0",
+    "immutable_release_identity": true,
+    "asset": {
+      "id": 533959499,
+      "name": "gooo-linux-amd64.tar.gz",
+      "size": 7057764,
+      "sha256": "3f6f34156dc959c4ae80711ff55cfbd135023fd57df673d28247e1894bf42f48"
+    }
+  },
+  "runtime": {
+    "platform": "linux-amd64",
+    "go_version": "1.27.x",
+    "semantic_graph_command": "gooo graph dump",
+    "semantic_check_command": "gooo check --semantic --json"
+  }
+}

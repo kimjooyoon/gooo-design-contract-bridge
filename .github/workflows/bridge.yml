@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,6 +15,10 @@ jobs:
   bridge:
     name: bridge
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WORK_DIR: /tmp/gooo-design-contract-bridge-work
+      OUTPUT_DIR: /tmp/gooo-design-contract-bridge-output
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,18 +28,150 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Evaluate Gooo contract
-        id: evaluate
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/gooo-design-contract-bridge-output
+      - name: Set up Go 1.27.x
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+
+      - name: Observe Go version
         run: |
-          python3 scripts/run_bridge.py \
+          set -euo pipefail
+          mkdir -p "$WORK_DIR"
+          go version | tee "$WORK_DIR/go-version.txt"
+
+      - name: Acquire immutable released Gooo
+        run: |
+          set -euo pipefail
+          rm -rf "$WORK_DIR/core" "$OUTPUT_DIR"
+          mkdir -p "$WORK_DIR/core/bin" "$OUTPUT_DIR"
+          lock="$GITHUB_WORKSPACE/contracts/gooo-core-release-lock-v4.json"
+          jq -e '
+            .schema == "gooo/design-contract-bridge/core-release-lock/v4" and
+            .release.immutable_release_identity == true and
+            .runtime.go_version == "1.27.x" and
+            .release.asset.id == 533959499 and
+            .release.asset.size == 7057764 and
+            .release.asset.sha256 == "3f6f34156dc959c4ae80711ff55cfbd135023fd57df673d28247e1894bf42f48"
+          ' "$lock" >/dev/null
+          repository=$(jq -r '.repository' "$lock")
+          tag=$(jq -r '.release.tag' "$lock")
+          release_id=$(jq -r '.release.release_id' "$lock")
+          target=$(jq -r '.release.tag_target_commit_sha' "$lock")
+          release_json="$WORK_DIR/core/release.json"
+          gh api "repos/$repository/releases/tags/$tag" > "$release_json"
+          jq -e --arg tag "$tag" --argjson id "$release_id" \
+            '.tag_name == $tag and .id == $id and .prerelease == true and .draft == false' \
+            "$release_json" >/dev/null
+          test "$(git ls-remote "https://github.com/$repository.git" "refs/tags/$tag" | awk '{print $1}')" = "$target"
+          asset_id=$(jq -r '.release.asset.id' "$lock")
+          asset_name=$(jq -r '.release.asset.name' "$lock")
+          expected_size=$(jq -r '.release.asset.size' "$lock")
+          expected_sha=$(jq -r '.release.asset.sha256' "$lock")
+          jq -e --argjson id "$asset_id" --arg name "$asset_name" --argjson size "$expected_size" \
+            '.assets[] | select(.id == $id and .name == $name and .size == $size)' "$release_json" >/dev/null
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/$repository/releases/assets/$asset_id" > "$WORK_DIR/core/$asset_name"
+          test "$(wc -c < "$WORK_DIR/core/$asset_name" | tr -d ' ')" = "$expected_size"
+          test "$(sha256sum "$WORK_DIR/core/$asset_name" | awk '{print $1}')" = "$expected_sha"
+          tar -xzf "$WORK_DIR/core/$asset_name" -C "$WORK_DIR/core/bin"
+          gooo=$(find "$WORK_DIR/core/bin" -type f -name gooo -print -quit)
+          test -n "$gooo"
+          chmod +x "$gooo"
+          printf '%s\n' "$gooo" > "$WORK_DIR/gooo-path"
+
+      - name: Observe Gooo semantic check and IR
+        run: |
+          set -euo pipefail
+          gooo=$(cat "$WORK_DIR/gooo-path")
+          source="$GITHUB_WORKSPACE/contracts/design-token-bridge.gooo"
+          measure() {
+            local label=$1
+            local output=$2
+            shift 2
+            local start_ns end_ns wall_ms rss_kib
+            start_ns=$(date +%s%N)
+            /usr/bin/time -f '%M' -o "$WORK_DIR/$label.rss" "$@" > "$output"
+            end_ns=$(date +%s%N)
+            wall_ms=$(( (end_ns - start_ns) / 1000000 ))
+            rss_kib=$(tr -d ' ' < "$WORK_DIR/$label.rss")
+            jq -n --argjson wall "$wall_ms" --argjson rss "$rss_kib" '{wall_ms:$wall,peak_rss_kib:$rss}' > "$WORK_DIR/$label.json"
+          }
+          "$gooo" check --semantic --json "$source" > "$WORK_DIR/gooo-check.json"
+          measure gooo "$WORK_DIR/gooo-ir.json" "$gooo" graph dump "$source"
+          cp "$WORK_DIR/gooo-check.json" "$OUTPUT_DIR/gooo-check.json"
+          cp "$WORK_DIR/gooo-ir.json" "$OUTPUT_DIR/gooo-ir.json"
+
+      - name: Generate design tokens and CSS from Gooo source
+        run: |
+          set -euo pipefail
+          measure() {
+            local label=$1
+            shift
+            local start_ns end_ns wall_ms rss_kib
+            start_ns=$(date +%s%N)
+            /usr/bin/time -f '%M' -o "$WORK_DIR/$label.rss" "$@"
+            end_ns=$(date +%s%N)
+            wall_ms=$(( (end_ns - start_ns) / 1000000 ))
+            rss_kib=$(tr -d ' ' < "$WORK_DIR/$label.rss")
+            jq -n --argjson wall "$wall_ms" --argjson rss "$rss_kib" '{wall_ms:$wall,peak_rss_kib:$rss}' > "$WORK_DIR/$label.json"
+          }
+          measure generator python3 "$GITHUB_WORKSPACE/scripts/generate_design_contract.py" \
             --repo-root "$GITHUB_WORKSPACE" \
-            --contract "$GITHUB_WORKSPACE/contracts/design-token-bridge.gooo" \
-            --tokens "$GITHUB_WORKSPACE/fixtures/canonical-design-tokens.json" \
-            --css "$GITHUB_WORKSPACE/fixtures/component.css" \
-            --graph "$GITHUB_WORKSPACE/fixtures/released-semantic-graph.json" \
+            --source "$GITHUB_WORKSPACE/contracts/design-token-bridge.gooo" \
+            --ir "$WORK_DIR/gooo-ir.json" \
+            --denominator "$GITHUB_WORKSPACE/contracts/design-contract-bridge-denominator-v2.json" \
+            --output "$OUTPUT_DIR/generated"
+
+      - name: Independently consume generated design contract
+        run: |
+          set -euo pipefail
+          measure() {
+            local label=$1
+            shift
+            local start_ns end_ns wall_ms rss_kib
+            start_ns=$(date +%s%N)
+            /usr/bin/time -f '%M' -o "$WORK_DIR/$label.rss" "$@"
+            end_ns=$(date +%s%N)
+            wall_ms=$(( (end_ns - start_ns) / 1000000 ))
+            rss_kib=$(tr -d ' ' < "$WORK_DIR/$label.rss")
+            jq -n --argjson wall "$wall_ms" --argjson rss "$rss_kib" '{wall_ms:$wall,peak_rss_kib:$rss}' > "$WORK_DIR/$label.json"
+          }
+          measure consumer python3 "$GITHUB_WORKSPACE/scripts/consume_design_contract.py" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --source "$GITHUB_WORKSPACE/contracts/design-token-bridge.gooo" \
+            --ir "$WORK_DIR/gooo-ir.json" \
+            --denominator "$GITHUB_WORKSPACE/contracts/design-contract-bridge-denominator-v2.json" \
+            --bundle "$OUTPUT_DIR/generated" \
+            --output "$OUTPUT_DIR/evidence"
+          measure replay python3 "$GITHUB_WORKSPACE/scripts/consume_design_contract.py" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --source "$GITHUB_WORKSPACE/contracts/design-token-bridge.gooo" \
+            --ir "$WORK_DIR/gooo-ir.json" \
+            --denominator "$GITHUB_WORKSPACE/contracts/design-contract-bridge-denominator-v2.json" \
+            --bundle "$OUTPUT_DIR/generated" \
+            --output "$WORK_DIR/replay"
+
+      - name: Assemble read-only conformance evidence
+        id: evaluate
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 > "$WORK_DIR/repository-status.txt"
+          python3 "$GITHUB_WORKSPACE/scripts/run_bridge.py" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --source "$GITHUB_WORKSPACE/contracts/design-token-bridge.gooo" \
+            --denominator "$GITHUB_WORKSPACE/contracts/design-contract-bridge-denominator-v2.json" \
+            --core-lock "$GITHUB_WORKSPACE/contracts/gooo-core-release-lock-v4.json" \
+            --ir "$WORK_DIR/gooo-ir.json" \
+            --check "$WORK_DIR/gooo-check.json" \
+            --generated "$OUTPUT_DIR/generated" \
+            --evidence "$OUTPUT_DIR/evidence" \
+            --replay "$WORK_DIR/replay" \
+            --runtime "$WORK_DIR" \
+            --go-version "$WORK_DIR/go-version.txt" \
+            --repository-status "$WORK_DIR/repository-status.txt" \
             --output "$OUTPUT_DIR"
+          test ! -s "$WORK_DIR/repository-status.txt"
           cat "$OUTPUT_DIR/actions.json" >> "$GITHUB_STEP_SUMMARY"
           cat "$OUTPUT_DIR/dossier.md" >> "$GITHUB_STEP_SUMMARY"
           echo "output_dir=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
@@ -49,10 +186,11 @@ jobs:
           retention-days: 14
 
       - name: Record Actions artifact receipt
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          local_files=$(find "$OUTPUT_DIR" -type f | wc -l | tr -d ' ')
           echo "## Actions artifact receipt" >> "$GITHUB_STEP_SUMMARY"
+          echo "- local_files=$local_files" | tee -a "$GITHUB_STEP_SUMMARY"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
-            --jq '.artifacts[] | select(.name == "gooo-design-contract-bridge") | "- id=\(.id) name=\(.name) digest=\(.digest) files=5 size_in_bytes=\(.size_in_bytes)"' \
+            --jq '.artifacts[] | select(.name == "gooo-design-contract-bridge") | "- id=\(.id) name=\(.name) digest=\(.digest) size_in_bytes=\(.size_in_bytes)"' \
             | tee -a "$GITHUB_STEP_SUMMARY"
