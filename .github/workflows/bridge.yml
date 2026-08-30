@@ -17,8 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      WORK_DIR: ${{ runner.temp }}/gooo-design-contract-bridge-work
-      OUTPUT_DIR: ${{ runner.temp }}/gooo-design-contract-bridge-output
+      WORK_DIR: /tmp/gooo-design-contract-bridge-work
+      OUTPUT_DIR: /tmp/gooo-design-contract-bridge-output
     steps:
       - name: Checkout
         uses: actions/checkout@v4
