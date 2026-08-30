@@ -1,0 +1,48 @@
+name: design-contract-bridge
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    name: bridge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Evaluate Gooo contract
+        id: evaluate
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/gooo-design-contract-bridge-output
+        run: |
+          python3 scripts/run_bridge.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --contract "$GITHUB_WORKSPACE/contracts/design-token-bridge.gooo" \
+            --tokens "$GITHUB_WORKSPACE/fixtures/canonical-design-tokens.json" \
+            --css "$GITHUB_WORKSPACE/fixtures/component.css" \
+            --graph "$GITHUB_WORKSPACE/fixtures/released-semantic-graph.json" \
+            --output "$OUTPUT_DIR"
+          cat "$OUTPUT_DIR/actions.json" >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUTPUT_DIR/dossier.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "output_dir=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Upload caller-owned outputs
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: gooo-design-contract-bridge
+          path: ${{ steps.evaluate.outputs.output_dir }}
+          if-no-files-found: error
+          retention-days: 14

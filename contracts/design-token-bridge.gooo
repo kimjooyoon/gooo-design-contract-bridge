@@ -1,0 +1,9 @@
+contract "design_token_bridge" version "1.0.0"
+released_semantic_graph "gooo-design-semantic-graph@1.0.0" from "fixtures/released-semantic-graph.json"
+
+activity "activity.design_token_mapping"
+read "canonical_design_tokens" from "fixtures/canonical-design-tokens.json"
+read "css_custom_property_fixture" from "fixtures/component.css"
+write "token_mapping" to caller_owned "token-mapping.json"
+write "human_dossier" to caller_owned "dossier.md"
+declare "refuted_over_unknown" precedence "REFUTED_OVER_UNKNOWN"

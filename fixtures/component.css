@@ -1,0 +1,7 @@
+/* @owner canonical-design-system */
+:root {
+  --color-surface-canvas: #F7F8FA;
+  --color-text-primary: #18202A;
+  --space-3: 12px;
+  --radius-md: 8px;
+}
