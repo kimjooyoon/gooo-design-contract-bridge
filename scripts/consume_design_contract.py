@@ -321,7 +321,6 @@ def main() -> int:
     denominator = load_json(args.denominator.resolve())
     output = args.output.resolve()
     source.relative_to(root)
-    ir_path.relative_to(root)
     args.denominator.resolve().relative_to(root)
     try:
         output.relative_to(root)

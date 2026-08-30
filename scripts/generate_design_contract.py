@@ -109,7 +109,7 @@ def main() -> int:
     ir_path = args.ir.resolve()
     denominator_path = args.denominator.resolve()
     output = args.output.resolve()
-    for path in (source_path, ir_path, denominator_path):
+    for path in (source_path, denominator_path):
         path.relative_to(root)
     ensure_outside(output, root)
 

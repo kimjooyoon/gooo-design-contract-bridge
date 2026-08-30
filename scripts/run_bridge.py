@@ -100,6 +100,13 @@ def runtime_metrics(path: Path) -> dict[str, int]:
     return {"wall_ms": int(value["wall_ms"]), "peak_rss_kib": int(value["peak_rss_kib"])}
 
 
+def path_label(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=Path)
@@ -128,7 +135,7 @@ def main() -> int:
     evidence = args.evidence.resolve()
     replay = args.replay.resolve()
     output = args.output.resolve()
-    for path in (source, denominator_path, core_lock_path, ir_path, check_path):
+    for path in (source, denominator_path, core_lock_path):
         path.relative_to(root)
     for path in (generated, evidence, replay, output):
         try:
@@ -252,7 +259,7 @@ def main() -> int:
         "schema": "gooo/design-contract-bridge/actions/v2",
         "user_path": {
             "source": str(source.relative_to(root)),
-            "semantic_ir": str(ir_path.relative_to(root)),
+            "semantic_ir": path_label(ir_path, root),
             "generated_bundle": str(generated),
             "independent_consumer": "scripts/consume_design_contract.py",
             "caller_owned_output": str(output),
@@ -295,7 +302,7 @@ def main() -> int:
             "precedence": "REFUTED_OVER_UNKNOWN",
         },
         "artifacts": {
-            "input": {"count": 5, "files": [str(source.relative_to(root)), str(denominator_path.relative_to(root)), str(core_lock_path.relative_to(root)), str(ir_path.relative_to(root)), str(check_path.relative_to(root))]},
+            "input": {"count": 5, "files": [path_label(source, root), path_label(denominator_path, root), path_label(core_lock_path, root), path_label(ir_path, root), path_label(check_path, root)]},
             "generated": {"count": len(generated_names), "bytes": generated_bytes, "files": generated_names, "digests": generated_digests},
             "consumer": {"count": len(evidence_names), "bytes": evidence_bytes, "files": evidence_names, "digests": evidence_digests},
             "replay": {"count": len(replay_names), "bytes": replay_bytes, "files": replay_names, "deterministic": deterministic},
