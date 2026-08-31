@@ -2,9 +2,11 @@
 
 This repository is a small closed user path: the authoritative `.gooo` design
 declarations are checked by a released Gooo binary, projected into tokens and
-CSS custom properties, and consumed by an independent reader. A semantic match
-closes only when the generated artifact, generation receipt, and claim graph
-are all bound. Visual similarity is not evidence of closure.
+CSS custom properties, and consumed by an independent reader. A separate
+evaluator binds each source activity to its semantic-IR activity, generated
+artifact, consumer receipt, and evaluator claim before it can close a claim.
+The evaluator compares source intent with consumer-observed role and state;
+visual similarity or file existence alone is not evidence of closure.
 
 GitHub Actions is the only verification authority. It pins Gooo `v0.4.0-dev`
 by release and asset identity, observes Go `1.27.x`, writes only to caller-owned
