@@ -181,6 +181,10 @@ def validate_bundle(
         raise ValueError("generation receipt activity binding set differs from source activities")
     if receipt.get("activity_binding_digest") != digest_value(activity_binding_list):
         raise ValueError("generation receipt activity binding digest is stale")
+    for intent in intents:
+        binding = binding_by_name[intent["source_activity"]]
+        intent["semantic_ir_activity"] = binding["semantic_ir_activity"]
+        intent["activity_binding_digest"] = binding["binding_digest"]
     observed_tokens = sorted(tokens.get("tokens", []), key=lambda item: item.get("name", ""))
     if observed_tokens != intents:
         raise ValueError("generated token artifact does not equal the independently parsed Gooo intents")
