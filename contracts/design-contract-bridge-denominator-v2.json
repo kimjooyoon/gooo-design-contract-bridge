@@ -6,7 +6,11 @@
   "indicator_counts": {"DRIVER": 4, "OUTCOME": 4, "GUARDRAIL": 4},
   "unknown_fields": ["stage", "step", "reason", "unknown_class", "next_operation", "blocked_by"],
   "precedence": "REFUTED_OVER_UNKNOWN",
+  "status_precedence": ["REFUTED", "UNKNOWN", "CLOSED"],
   "reader_resolutions": ["EXACT", "ROLE", "EXISTENCE"],
+  "consumer_observation_fields": ["role", "state"],
+  "binding_chain": ["source_activity", "semantic_ir_activity", "generated_artifact", "consumer_receipt", "evaluator_claim"],
+  "challenge_scenarios": ["normal", "missing-consumer-receipt", "role-contradiction", "stale-generated-digest", "malformed-unknown-tuple", "fixed-point-core-decision", "authority-escalation"],
   "cells": [
     {"id": "foundation.core-release", "activity": "DeclareCanvasToken", "proof": "FOUNDATION", "indicator": "DRIVER", "axis": "CORE_RELEASE"},
     {"id": "foundation.spec-release", "activity": "DeclarePrimaryTextToken", "proof": "FOUNDATION", "indicator": "DRIVER", "axis": "SPEC_RELEASE"},

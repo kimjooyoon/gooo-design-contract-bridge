@@ -87,6 +87,46 @@ def parse_source(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def generated_artifact_refs(meaning: dict[str, str]) -> list[str]:
+    refs: list[str] = []
+    artifact = meaning.get("artifact")
+    if artifact:
+        refs.append(artifact)
+    for shared in ("generation-receipt.json", "claim-graph.json", "manifest.json", "provenance.json"):
+        if shared not in refs:
+            refs.append(shared)
+    return refs
+
+
+def activity_bindings(records: list[dict[str, Any]], ir: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = [
+        node for node in ir.get("nodes", [])
+        if str(node.get("kind", "")).lower() == "activity"
+    ]
+    if len(nodes) != len(records) or len({node.get("name") for node in nodes}) != len(nodes):
+        raise ValueError("semantic IR activity nodes must bind one-to-one to source activities")
+    by_name = {node["name"]: node for node in nodes}
+    result = []
+    for record in records:
+        node = by_name.get(record["activity"])
+        if node is None:
+            raise ValueError(f"semantic IR is missing source activity: {record['activity']}")
+        body = {
+            "source_activity": {
+                "name": record["activity"],
+                "line": record["line"],
+                "program_digest": record["program_digest"],
+            },
+            "semantic_ir_activity": {
+                "name": record["activity"],
+                "digest": digest_value(node),
+            },
+            "generated_artifacts": generated_artifact_refs(record["meaning"]),
+        }
+        result.append({**body, "binding_digest": digest_value(body)})
+    return result
+
+
 def ensure_outside(path: Path, root: Path) -> None:
     try:
         path.relative_to(root)
@@ -131,6 +171,8 @@ def main() -> int:
         raise ValueError("released Gooo IR is not an available graph dump")
     ir_digest = "sha256:" + str(ir["ir"]["semantic_digest"])
     graph_digest = "sha256:" + hashlib.sha256(ir_path.read_bytes()).hexdigest()
+    bindings = activity_bindings(records, ir)
+    binding_by_activity = {item["source_activity"]["name"]: item for item in bindings}
 
     token_records = []
     for record in records:
@@ -154,6 +196,8 @@ def main() -> int:
             "source_activity": record["activity"],
             "source_line": record["line"],
             "source_program_digest": record["program_digest"],
+            "semantic_ir_activity": binding_by_activity[record["activity"]]["semantic_ir_activity"],
+            "activity_binding_digest": binding_by_activity[record["activity"]]["binding_digest"],
         })
     if len(token_records) != 4 or len({item["name"] for item in token_records}) != 4:
         raise ValueError("the Gooo design source must declare four unique token intents")
@@ -191,6 +235,7 @@ def main() -> int:
             "generated_artifacts": generated_refs,
             "source_digest": source_digest,
             "ir_digest": ir_digest,
+            "activity_binding_digest": token["activity_binding_digest"],
         }
         claims.append({**claim_body, "claim_digest": digest_value(claim_body)})
     claim_graph = {
@@ -199,6 +244,7 @@ def main() -> int:
         "ir_digest": ir_digest,
         "claims": claims,
         "generated_artifacts": generated_refs,
+        "activity_binding_digest": digest_value(bindings),
     }
     claim_graph_bytes = write_json(output / "claim-graph.json", claim_graph)
 
@@ -211,6 +257,8 @@ def main() -> int:
         "activity_count": len(records),
         "token_count": len(token_records),
         "bundle_files": BUNDLE_FILES,
+        "activity_bindings": bindings,
+        "activity_binding_digest": digest_value(bindings),
         "generated_artifact_digests": {
             "design-tokens.json": digest_bytes(token_bytes),
             "component.css": digest_bytes(css_bytes),
@@ -225,6 +273,7 @@ def main() -> int:
         "ir_digest": ir_digest,
         "files": BUNDLE_FILES,
         "activities": [item["activity"] for item in records],
+        "activity_binding_digest": digest_value(bindings),
     }
     write_json(output / "manifest.json", manifest)
     provenance = {
@@ -233,6 +282,7 @@ def main() -> int:
         "source_digest": source_digest,
         "ir_digest": ir_digest,
         "generated_by": "product-owned-design-contract-generator",
+        "activity_binding_digest": digest_value(bindings),
         "permission": {"repository_writes": 0, "output_scope": "caller-owned"},
     }
     write_json(output / "provenance.json", provenance)

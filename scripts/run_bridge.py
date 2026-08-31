@@ -60,6 +60,7 @@ def inventory(root: Path) -> dict[str, Any]:
     files = [path for path in files if path != root / "README.md"]
     go_files = [path for path in files if path.suffix == ".go"]
     gooo_files = [path for path in files if path.suffix == ".gooo"]
+    css_files = [path for path in files if path.suffix == ".css"]
     return {
         "root_readme_excluded": True,
         "regular_files": len(files),
@@ -67,6 +68,7 @@ def inventory(root: Path) -> dict[str, Any]:
         "physical_lines": sum(physical_lines(path) for path in files),
         "go": {"files": len(go_files), "physical_lines": sum(physical_lines(path) for path in go_files)},
         "gooo": {"files": len(gooo_files), "physical_lines": sum(physical_lines(path) for path in gooo_files)},
+        "css": {"files": len(css_files), "physical_lines": sum(physical_lines(path) for path in css_files)},
         "files": sorted(path.relative_to(root).as_posix() for path in files),
     }
 
@@ -87,6 +89,26 @@ def source_programs(source: Path) -> dict[str, dict[str, str]]:
     if len(programs) != 12:
         raise ValueError("twelve source activity programs are required")
     return programs
+
+
+def source_activity_metadata(source: Path) -> dict[str, dict[str, Any]]:
+    metadata: dict[str, dict[str, Any]] = {}
+    for line_number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
+        match = ACTIVITY_RE.match(line.strip())
+        if not match:
+            continue
+        name = match.group("name")
+        program = match.group("program")
+        if name in metadata:
+            raise ValueError(f"duplicate source activity: {name}")
+        metadata[name] = {
+            "name": name,
+            "line": line_number,
+            "program_digest": digest_bytes(program.encode("utf-8")),
+        }
+    if len(metadata) != 12:
+        raise ValueError("twelve source activity metadata records are required")
+    return metadata
 
 
 def artifact_inventory(directory: Path) -> tuple[list[str], int, dict[str, str]]:
@@ -148,6 +170,7 @@ def main() -> int:
     core_lock = load_json(core_lock_path)
     ir = load_json(ir_path)
     programs = source_programs(source)
+    source_metadata = source_activity_metadata(source)
     cells = denominator.get("cells", [])
     if denominator.get("schema") != "gooo/design-contract-bridge/denominator/v2" or len(cells) != 12:
         raise ValueError("product denominator is not the fixed twelve-cell contract")
@@ -155,11 +178,19 @@ def main() -> int:
         raise ValueError("proof denominator is not 4/4/4")
     if denominator.get("indicator_counts") != {"DRIVER": 4, "OUTCOME": 4, "GUARDRAIL": 4}:
         raise ValueError("indicator denominator is not 4/4/4")
-    if denominator.get("unknown_fields") != UNKNOWN_FIELDS or denominator.get("precedence") != "REFUTED_OVER_UNKNOWN":
+    if (
+        denominator.get("unknown_fields") != UNKNOWN_FIELDS
+        or denominator.get("precedence") != "REFUTED_OVER_UNKNOWN"
+        or denominator.get("status_precedence") != ["REFUTED", "UNKNOWN", "CLOSED"]
+        or denominator.get("consumer_observation_fields") != ["role", "state"]
+        or denominator.get("binding_chain") != ["source_activity", "semantic_ir_activity", "generated_artifact", "consumer_receipt", "evaluator_claim"]
+    ):
         raise ValueError("unknown tuple or precedence contract is incomplete")
-    activity_names = {node.get("name") for node in ir.get("nodes", []) if str(node.get("kind", "")).lower() == "activity"}
-    if len(activity_names) != 12 or activity_names != set(programs):
+    ir_activity_nodes = [node for node in ir.get("nodes", []) if str(node.get("kind", "")).lower() == "activity"]
+    activity_names = {node.get("name") for node in ir_activity_nodes}
+    if len(ir_activity_nodes) != 12 or len(activity_names) != 12 or activity_names != set(programs):
         raise ValueError("semantic IR is not a one-to-one projection of the twelve source activities")
+    ir_activity_by_name = {node["name"]: node for node in ir_activity_nodes}
     if ir.get("schema_version") != "gooo-graph/v1" or ir.get("ir", {}).get("status") != "available":
         raise ValueError("semantic IR graph is unavailable")
     source_digest = digest_bytes(source.read_bytes())
@@ -193,22 +224,86 @@ def main() -> int:
     challenge = load_json(evidence / "challenge-report.json")
     match = load_json(evidence / "match-report.json")
     consumer_receipt = load_json(evidence / "consumer-receipt.json")
+    generated_receipt = load_json(generated / "generation-receipt.json")
     normalized = load_json(evidence / "normalized-core.json")
+    consumer_receipt_digest = digest_bytes((evidence / "consumer-receipt.json").read_bytes())
+    generated_receipt_digest = digest_bytes((generated / "generation-receipt.json").read_bytes())
+
+    generated_bindings = generated_receipt.get("activity_bindings", [])
+    consumer_bindings = consumer_receipt.get("activity_bindings", [])
+    if len(generated_bindings) != 12 or len(consumer_bindings) != 12:
+        raise ValueError("generated and consumer receipts must each contain twelve activity bindings")
+    generated_by_activity = {item.get("source_activity", {}).get("name"): item for item in generated_bindings}
+    consumer_by_activity = {item.get("source_activity", {}).get("name"): item for item in consumer_bindings}
+    if set(generated_by_activity) != set(source_metadata) or set(consumer_by_activity) != set(source_metadata):
+        raise ValueError("generated and consumer receipt activity bindings do not equal source activities")
+    if len(generated_by_activity) != 12 or len(consumer_by_activity) != 12:
+        raise ValueError("activity bindings are not one-to-one")
+    if generated_receipt.get("activity_binding_digest") != digest_value(generated_bindings):
+        raise ValueError("generated receipt activity binding digest is stale")
+    if consumer_receipt.get("activity_binding_digest") != digest_value(consumer_bindings):
+        raise ValueError("consumer receipt activity binding digest is stale")
+    for activity, source_record in source_metadata.items():
+        generated_binding = generated_by_activity[activity]
+        consumer_binding = consumer_by_activity[activity]
+        if generated_binding != {key: value for key, value in consumer_binding.items() if key in generated_binding}:
+            raise ValueError(f"consumer receipt changed the source/IR/generated binding: {activity}")
+        if generated_binding["source_activity"].get("line") != source_record["line"] or generated_binding["source_activity"].get("program_digest") != source_record["program_digest"]:
+            raise ValueError(f"generated receipt source activity binding is stale: {activity}")
+        semantic = generated_binding.get("semantic_ir_activity", {})
+        if semantic.get("name") != activity or semantic.get("digest") != digest_value(ir_activity_by_name[activity]):
+            raise ValueError(f"generated receipt semantic IR binding is stale: {activity}")
+        binding_body = {key: value for key, value in generated_binding.items() if key != "binding_digest"}
+        if generated_binding.get("binding_digest") != digest_value(binding_body):
+            raise ValueError(f"generated receipt binding digest is stale: {activity}")
+    if consumer_receipt.get("source_digest") != source_digest or consumer_receipt.get("ir_digest") != ir_digest:
+        raise ValueError("consumer receipt is not bound to source and semantic IR")
+    if match.get("consumer_receipt_digest") != consumer_receipt_digest:
+        raise ValueError("match report is not bound to the actual consumer receipt")
+    if match.get("activity_binding_digest") != generated_receipt.get("activity_binding_digest"):
+        raise ValueError("match report is not bound to the generated activity lineage")
     replay_match = (replay / "match-report.json").read_bytes()
     replay_challenge = (replay / "challenge-report.json").read_bytes()
     replay_normalized = (replay / "normalized-core.json").read_bytes()
+    replay_receipt = (replay / "consumer-receipt.json").read_bytes()
     deterministic = (
         replay_match == (evidence / "match-report.json").read_bytes()
         and replay_challenge == (evidence / "challenge-report.json").read_bytes()
         and replay_normalized == (evidence / "normalized-core.json").read_bytes()
+        and replay_receipt == (evidence / "consumer-receipt.json").read_bytes()
     )
     reader_statuses = match.get("readers", [])
     if match.get("status") != "CLOSED" or [item.get("status") for item in reader_statuses] != ["CLOSED", "CLOSED", "CLOSED"]:
         raise ValueError("normal semantic match did not close all three readers")
+    if match.get("evidence_binding", {}).get("consumer_receipt") is not True:
+        raise ValueError("normal semantic match did not bind the consumer receipt")
+    observations = match.get("observations", [])
+    if len(observations) != 4 or not all(item.get("role_match") and item.get("state_match") for item in observations):
+        raise ValueError("normal semantic match did not compare consumer-observed role and state")
     counts = challenge.get("counts", {})
     if counts.get("CLOSED", 0) < 1 or counts.get("UNKNOWN", 0) < 1 or counts.get("REFUTED", 0) < 1:
         raise ValueError("normal, UNKNOWN, and REFUTED minimum cases are required")
-    if normalized.get("fixed_point") != "REFUTED" or not consumer_receipt.get("semantic_match_requires"):
+    required_scenarios = {
+        "normal": "CLOSED",
+        "missing-consumer-receipt": "UNKNOWN",
+        "role-contradiction": "REFUTED",
+        "stale-generated-digest": "REFUTED",
+        "malformed-unknown-tuple": "REFUTED",
+        "fixed-point-core-decision": "REFUTED",
+        "authority-escalation": "REFUTED",
+    }
+    if not set(required_scenarios).issubset(set(denominator.get("challenge_scenarios", []))):
+        raise ValueError("denominator does not preserve all required challenge scenarios")
+    scenario_statuses = {item.get("scenario_id"): item.get("status") for item in challenge.get("scenarios", [])}
+    if any(scenario_statuses.get(scenario) != expected for scenario, expected in required_scenarios.items()):
+        raise ValueError("required semantic challenge scenarios are missing or have the wrong status")
+    unknown_scenarios = [item for item in challenge.get("scenarios", []) if item.get("status") == "UNKNOWN"]
+    for scenario in unknown_scenarios:
+        for reader in scenario.get("readers", []):
+            for descent in reader.get("descent", []):
+                if any(field not in descent for field in UNKNOWN_FIELDS):
+                    raise ValueError(f"UNKNOWN descent lost causal field: {scenario.get('scenario_id')}")
+    if normalized.get("fixed_point") != "REFUTED" or normalized.get("status_precedence") != ["REFUTED", "UNKNOWN", "CLOSED"] or not consumer_receipt.get("semantic_match_requires"):
         raise ValueError("fail-closed normalization or evidence binding is missing")
     if not deterministic:
         raise ValueError("consumer replay is not byte-deterministic")
@@ -217,36 +312,57 @@ def main() -> int:
     match_digest = digest_bytes((evidence / "match-report.json").read_bytes())
     challenge_digest = digest_bytes((evidence / "challenge-report.json").read_bytes())
     for cell in cells:
-        program = programs[cell["activity"]]
-        artifact = program.get("artifact", "evaluator evidence")
+        activity = cell["activity"]
+        program = programs[activity]
+        generated_binding = generated_by_activity[activity]
+        consumer_binding = consumer_by_activity[activity]
+        consumer_observed = consumer_binding.get("consumer_observed", {})
+        claim_id = f"cell.claim.{cell['id']}"
         body = {
             "claim_id": f"cell.claim.{cell['id']}",
             "cell_id": cell["id"],
-            "activity": cell["activity"],
+            "activity": activity,
             "proof": cell["proof"],
             "indicator": cell["indicator"],
             "axis": cell["axis"],
-            "status": "CLOSED",
+            "status": "CLOSED" if match["status"] == "CLOSED" and consumer_observed.get("observed_state") == "CLOSED" else "UNKNOWN",
             "source_digest": source_digest,
             "ir_digest": ir_digest,
-            "artifact_refs": [artifact, "match-report.json", "challenge-report.json"],
-            "evidence_refs": [match_digest, challenge_digest],
+            "source_activity": source_metadata[activity],
+            "semantic_ir_activity": generated_binding["semantic_ir_activity"],
+            "generated_artifact": {
+                "refs": generated_binding["generated_artifacts"],
+                "generation_receipt": {"file": "generation-receipt.json", "digest": generated_receipt_digest},
+                "binding_digest": generated_binding["binding_digest"],
+            },
+            "consumer_receipt": {
+                "file": "consumer-receipt.json",
+                "digest": consumer_receipt_digest,
+                "activity_binding_digest": consumer_binding["binding_digest"],
+            },
+            "consumer_observed": consumer_observed,
+            "evaluator": {"claim_id": claim_id, "decision": "CLOSED" if match["status"] == "CLOSED" else "UNKNOWN"},
+            "artifact_refs": [program.get("artifact", "evaluator evidence"), "match-report.json", "challenge-report.json", "consumer-receipt.json"],
+            "evidence_refs": [match_digest, challenge_digest, consumer_receipt_digest, generated_receipt_digest],
         }
         cell_claims.append({**body, "claim_digest": digest_value(body)})
     write_json(output / "evidence" / "cell-claims.json", {
         "schema": "gooo/design-contract-bridge/cell-claims/v2",
         "source_digest": source_digest,
         "ir_digest": ir_digest,
+        "generated_receipt_digest": generated_receipt_digest,
+        "consumer_receipt_digest": consumer_receipt_digest,
+        "activity_binding_digest": generated_receipt.get("activity_binding_digest"),
         "claims": cell_claims,
     })
 
     repo_inventory = inventory(root)
-    output_names_before, _, _ = artifact_inventory(output)
+    output_names_before, output_bytes_before, _ = artifact_inventory(output)
     output_names_base = sorted(set(output_names_before + ["actions.json", "dossier.md"]))
     stages = {
         "executed": ["go-version-observation", "released-gooo-download", "semantic-check", "semantic-ir-dump", "design-source-generation", "independent-consumer", "challenge-cases", "deterministic-replay", "cell-claim-assembly"],
         "reused": ["immutable-core-release-identity", "product-denominator-v2", "source-activity-identities"],
-        "skipped": ["local-go-build", "local-go-test", "local-gofmt", "local-go-vet", "external-user-utility"]
+        "skipped": ["local-go-build", "local-go-test", "local-gofmt", "local-go-vet", "local-conformance", "external-user-utility"]
     }
     verification = {
         "build": {"executed": 0, "reused": 0, "skipped": 1, "wall_ms": 0, "peak_rss_kib": 0},
@@ -279,6 +395,19 @@ def main() -> int:
             "one_to_one": len(programs) == len(activity_names) == len(cell_claims) == 12,
             "source_digest": source_digest,
             "ir_digest": ir_digest,
+            "generated_receipt_digest": generated_receipt_digest,
+            "consumer_receipt_digest": consumer_receipt_digest,
+            "activity_binding_digest": generated_receipt.get("activity_binding_digest"),
+            "activity_bindings": [
+                {
+                    "source_activity": claim["source_activity"],
+                    "semantic_ir_activity": claim["semantic_ir_activity"],
+                    "generated_artifact": claim["generated_artifact"],
+                    "consumer_receipt": claim["consumer_receipt"],
+                    "evaluator_claim": claim["evaluator"],
+                }
+                for claim in cell_claims
+            ],
         },
         "fixed_cells": {
             "observed": len(cell_claims), "total": 12,
@@ -306,13 +435,22 @@ def main() -> int:
             "generated": {"count": len(generated_names), "bytes": generated_bytes, "files": generated_names, "digests": generated_digests},
             "consumer": {"count": len(evidence_names), "bytes": evidence_bytes, "files": evidence_names, "digests": evidence_digests},
             "replay": {"count": len(replay_names), "bytes": replay_bytes, "files": replay_names, "deterministic": deterministic},
-            "caller_output": {"files": output_names_base},
+            "caller_output": {"count": len(output_names_base), "bytes": output_bytes_before, "files": output_names_base},
         },
         "inventory": repo_inventory,
         "runtime": {"gooo": runtime["gooo"], "generator": runtime["generator"], "consumer": runtime["consumer"], "replay": runtime["replay"]},
         "verification": verification,
         "stages": {name: {"count": len(values), "items": values} for name, values in stages.items()},
-        "policy": {"repository_writes": 0, "local_test_executions": 0, "cross_project_required_gates": 0, "product_generation_scope": "caller-owned-temp-output-only"},
+        "policy": {
+            "repository_writes": 0,
+            "local_test_executions": 0,
+            "local_build_executions": 0,
+            "local_gofmt_executions": 0,
+            "local_vet_executions": 0,
+            "local_conformance_executions": 0,
+            "cross_project_required_gates": 0,
+            "product_generation_scope": "caller-owned-temp-output-only",
+        },
         "releases": {"released_adoption": {"observed": 0, "total": 1, "status": "UNKNOWN"}, "external_utility": {"observed": 0, "total": 1, "status": "UNKNOWN"}},
         "improvement": {"status": "UNKNOWN", "reason": "No exact same-input same-tool before/after pair was supplied."},
     }
@@ -332,14 +470,14 @@ def main() -> int:
         f"- one-to-one binding: source activities `{len(programs)}`, semantic IR activities `{len(activity_names)}`, evaluator claims `{len(cell_claims)}`.",
         f"- readers: `EXACT={base_actions['readers']['EXACT']}/1`, `ROLE={base_actions['readers']['ROLE']}/1`, `EXISTENCE={base_actions['readers']['EXISTENCE']}/1`.",
         f"- cases: `CLOSED={counts.get('CLOSED', 0)}`, `UNKNOWN={counts.get('UNKNOWN', 0)}`, `REFUTED={counts.get('REFUTED', 0)}`; malformed UNKNOWN and FIXED_POINT are `REFUTED`.",
-        f"- artifacts: input `{5}`, generated `{len(generated_names)}/{generated_bytes} bytes`, consumer `{len(evidence_names)}/{evidence_bytes} bytes`, replay `{len(replay_names)}/{replay_bytes} bytes`.",
-        f"- policy: `repository_writes=0`, `local_test_executions=0`, `cross_project_required_gates=0`; generation scope is caller-owned output.",
-        f"- inventory: descendant directories `{repo_inventory['descendant_directories']}`, regular files `{repo_inventory['regular_files']}`, Go `{repo_inventory['go']['files']}/{repo_inventory['go']['physical_lines']}`, Gooo `{repo_inventory['gooo']['files']}/{repo_inventory['gooo']['physical_lines']}`, physical lines `{repo_inventory['physical_lines']}`; root README excluded.",
+        f"- artifacts: input `{5}`, generated `{len(generated_names)}/{generated_bytes} bytes`, consumer `{len(evidence_names)}/{evidence_bytes} bytes`, replay `{len(replay_names)}/{replay_bytes} bytes`, caller output `{len(output_names_base)}/{base_actions['artifacts']['caller_output']['bytes']} bytes`.",
+        f"- policy: `repository_writes=0`, local build/test/gofmt/vet/conformance `0`, `cross_project_required_gates=0`; generation scope is caller-owned output.",
+        f"- inventory: descendant directories `{repo_inventory['descendant_directories']}`, regular files `{repo_inventory['regular_files']}`, Go `{repo_inventory['go']['files']}/{repo_inventory['go']['physical_lines']}`, Gooo `{repo_inventory['gooo']['files']}/{repo_inventory['gooo']['physical_lines']}`, CSS `{repo_inventory['css']['files']}/{repo_inventory['css']['physical_lines']}`, physical lines `{repo_inventory['physical_lines']}`; root README excluded.",
         f"- runtime: Go 1.27 observation `{go_version}`, conformance `wall_ms={elapsed_ms}`, `peak_rss_kib={peak_rss_kib}`.",
         "",
         "## Reader and precedence evidence",
         "",
-        "EXACT, ROLE, and EXISTENCE are separate resolutions. Each CLOSED result binds the generated artifact, generation receipt, and claim graph; visual similarity is insufficient. UNKNOWN records preserve stage, step, reason, unknown_class, next_operation, blocked_by, and causal_frontier. Known contradiction outranks UNKNOWN as REFUTED_OVER_UNKNOWN. FIXED_POINT and permission escalation fail closed.",
+        "EXACT, ROLE, and EXISTENCE are separate resolutions. Each CLOSED result binds the source activity, semantic-IR activity, generated artifact, generation receipt, consumer receipt, and evaluator claim; visual similarity and file existence alone are insufficient. UNKNOWN records preserve stage, step, reason, unknown_class, next_operation, blocked_by, and causal_frontier on every descent edge. Known contradiction outranks UNKNOWN as REFUTED_OVER_UNKNOWN. FIXED_POINT, stale digests, and permission escalation fail closed.",
         "",
         "| Scenario | Status | Evidence digest |",
         "| --- | --- | --- |",
@@ -352,6 +490,7 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     action_bytes = 0
     for _ in range(20):
+        base_actions["artifacts"]["caller_output"]["count"] = len(output_names_base)
         base_actions["artifacts"]["caller_output"]["bytes"] = action_bytes
         write_json(output / "actions.json", base_actions)
         (output / "dossier.md").write_text(dossier_text, encoding="utf-8")
@@ -360,7 +499,7 @@ def main() -> int:
             break
         action_bytes = actual_bytes
     actual_names, actual_bytes, _ = artifact_inventory(output)
-    if actual_names != output_names_base or actual_bytes != base_actions["artifacts"]["caller_output"]["bytes"]:
+    if actual_names != output_names_base or actual_bytes != base_actions["artifacts"]["caller_output"]["bytes"] or base_actions["artifacts"]["caller_output"]["count"] != len(actual_names):
         raise ValueError("caller-owned artifact byte accounting did not reach a stable exact value")
     return 0
 
